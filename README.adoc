@@ -1,0 +1,78 @@
+= Anomalous behaviour of Spring-data-jdbc custom reposirotries returning vavr.io.control.Try
+
+== Context
+
+We are using a Spring Boot application 3.4.3.
+
+These are the dependencies:
+
+[source,groovy]
+.build.gradle
+----
+include::build.gradle[tag=dependencies]
+----
+
+This is the application configuration:
+[source,yaml]
+.application.yml
+----
+include::src/main/resources/application.yml[]
+----
+
+== Problem
+
+=== Defining a method in a custom repository fragment that returns a `vavr.io.control.Try`
+
+Spring-data-jdbc custom repositories returning `vavr.io.control.Try` are not working as expected (or as _I am expecting_). This is the custom repository fragment:
+
+[source,java]
+.CustomOrderRepository.java
+----
+include::src/main/java/com/example/spring_data_jdbc_try/order/repository/CustomOrderRepository.java[]
+----
+
+The contract of the method `Try<Boolean> tryUpdateStatus` is to return a `Try` object that contains the result of the update operation. However, when the method is called, it returns a `Try<Try<Boolean>>`.
+
+This is the implementation of the custom repository fragment:
+
+[source,java]
+.CustomOrderRepositoryImpl.java
+----
+include::src/main/java/com/example/spring_data_jdbc_try/order/repository/CustomOrderRepositoryImpl.java[]
+----
+
+This fragment provides 2 versions of the functionality:
+
+* `tryUpdateStatus` - which returns a `Try<Boolean>` object
+* `updateStatus` - which returns a `Boolean` object
+
+`tryUpdateStatus` just invokes the `updateStatus` method and wraps the result in a `Try` object.
+
+
+=== Defining a method in the BASE repository that returns a `vavr.io.control.Try`
+
+In contradiction with the behaviour of placing the method in the custom fragment, when we add the signature in the BASE repository, it works as expected. This is the signature of the repository method:
+
+[source,java]
+.OrderRepository.java
+----
+include::src/main/java/com/example/spring_data_jdbc_try/order/repository/OrderRepository.java[]
+----
+
+It's the same signature as the one in the custom fragment, but this time it is placed in the base repository. and uses the `@Query` annotation so that spring-data-jdbc can generate the implementation for us.
+
+== Tests
+
+I have provided an integration test that exposes the weird behaviour:
+
+[source,groovy]
+.OrderRepositoryIntegrationSpec.groovy
+----
+include::src/test/groovy/com/example/spring_data_jdbc_try/order/repository/OrderRepositoryIntegrationSpec.groovy[]
+----
+
+== Conclusion
+
+Both methods have the same type signature, and should behave the same. However, the method in the custom repository fragment returns a `Try<Try<Boolean>>` object, while the method in the base repository returns a `Try<Boolean>` object.
+
+This looks like a bug, or I have failed in finding any documentation explaining hwo to use it.

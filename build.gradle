@@ -17,7 +17,7 @@ java {
 repositories {
 	mavenCentral()
 }
-
+// tag::dependencies[]
 dependencies {
 	implementation 'org.apache.groovy:groovy'
 
@@ -34,6 +34,7 @@ dependencies {
 	testImplementation "org.spockframework:spock-spring:${spockVersion}"
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
+// end::dependencies[]
 
 tasks.named('test') {
 	useJUnitPlatform()

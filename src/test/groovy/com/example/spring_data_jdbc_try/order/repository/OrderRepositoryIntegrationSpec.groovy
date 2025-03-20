@@ -1,22 +1,13 @@
 package com.example.spring_data_jdbc_try.order.repository
 
-import com.example.spring_data_jdbc_try.order.data.Order
 import com.example.spring_data_jdbc_try.SpringDataJdbcTryApplication
-import com.example.spring_data_jdbc_try.order.repository.OrderRepository
+import com.example.spring_data_jdbc_try.order.data.Order
 import io.vavr.control.Try
 import org.springframework.beans.factory.annotation.Autowired
 import org.springframework.boot.test.context.SpringBootTest
-import org.springframework.context.ApplicationContext
 import org.springframework.transaction.annotation.Transactional
 import spock.lang.Specification
 import spock.lang.Subject
-
-import javax.sql.DataSource
-
-
-/*
- * Created by luis.muniz on 2025-03-19
- */
 
 @Subject(OrderRepository)
 @SpringBootTest(classes = [SpringDataJdbcTryApplication])
@@ -24,21 +15,7 @@ import javax.sql.DataSource
 class OrderRepositoryIntegrationSpec extends Specification {
     @Subject
     @Autowired
-    DataSource dataSource
-
-    @Autowired
     private OrderRepository orderRepository
-
-    @Autowired
-    private ApplicationContext applicationContext
-
-    def "It has an applicaiton context"() {
-        given:
-        println applicationContext.getBeanDefinitionNames().join("\n")
-
-        expect:
-        dataSource != null
-    }
 
     def "It succeeds to update an order's status if the custom repository method returns a Boolean"() {
         given:
@@ -47,7 +24,7 @@ class OrderRepositoryIntegrationSpec extends Specification {
 
 
         when:
-        def newStatus = orderRepository.updateStatus(saved.id, "OUT_OF_STOCK")
+        def newStatus = orderRepository.updateStatus(saved.id(), "OUT_OF_STOCK")
 
         then:
         newStatus
@@ -65,10 +42,10 @@ class OrderRepositoryIntegrationSpec extends Specification {
         then:
         attempt.success
         Try.isAssignableFrom(attempt.class)
-        Try<Boolean> wrappedTry = attempt.get() as Try// this should be a String, but is a Try
-        Try.isAssignableFrom(wrappedTry.class)
-        wrappedTry.success
-        wrappedTry.get() == true
+        def wrappedValueShouldBeBoolean = attempt.get() as Try// this should be a Boolean, but is a Try<Boolean>
+        Try.isAssignableFrom(wrappedValueShouldBeBoolean.class)
+        wrappedValueShouldBeBoolean.success
+        wrappedValueShouldBeBoolean.get() == true
     }
 
     def "It correctly returns the type of a BASE repository method that returns a Try instance."() {
@@ -83,9 +60,9 @@ class OrderRepositoryIntegrationSpec extends Specification {
         then:
         attempt.success
         Try.isAssignableFrom(attempt.class)
-        def wrapped = attempt.get()
-        Boolean.isAssignableFrom(wrapped.class)
-        wrapped == true
+        def wrappedValueShouldBeBoolean = attempt.get()
+        wrappedValueShouldBeBoolean.class == Boolean
+        wrappedValueShouldBeBoolean == true
     }
 
 
