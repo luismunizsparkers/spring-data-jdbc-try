@@ -1,4 +1,4 @@
-= Anomalous behaviour of Spring-data-jdbc custom reposirotries returning vavr.io.control.Try
+= Anomalous behaviour of Spring-data-jdbc custom repositories returning vavr.io.control.Try
 
 == Context
 
@@ -9,14 +9,42 @@ These are the dependencies:
 [source,groovy]
 .build.gradle
 ----
-include::build.gradle[tag=dependencies]
+// include::build.gradle[tag=dependencies]
+dependencies {
+	implementation 'org.apache.groovy:groovy'
+
+	implementation 'org.springframework.boot:spring-boot-starter-data-jdbc'
+	implementation 'org.springframework.boot:spring-boot-starter-data-rest'
+	implementation 'org.liquibase:liquibase-core'
+	implementation "io.vavr:vavr:${vavrVersion}"
+	runtimeOnly 'com.h2database:h2'
+
+	implementation "jakarta.validation:jakarta.validation-api:${jakartaValidationVersion}"
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation "org.spockframework:spock-core:${spockVersion}"
+	testImplementation "org.spockframework:spock-spring:${spockVersion}"
+	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
+}
+
 ----
 
 This is the application configuration:
 [source,yaml]
 .application.yml
 ----
-include::src/main/resources/application.yml[]
+// include::src/main/resources/application.yml[]
+spring:
+  application:
+    name: spring-data-jdbc-try
+  liquibase:
+    change-log: classpath:db/changelog/db.changelog-master.xml
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+#debug: true
 ----
 
 == Problem
@@ -28,7 +56,15 @@ Spring-data-jdbc custom repositories returning `vavr.io.control.Try` are not wor
 [source,java]
 .CustomOrderRepository.java
 ----
-include::src/main/java/com/example/spring_data_jdbc_try/order/repository/CustomOrderRepository.java[]
+// include::src/main/java/com/example/spring_data_jdbc_try/order/repository/CustomOrderRepository.java[]
+package com.example.spring_data_jdbc_try.order.repository;
+
+import io.vavr.control.Try;
+
+public interface CustomOrderRepository {
+    public Try<Boolean> tryUpdateStatus(Integer orderId, String newStatus);
+    public Boolean updateStatus(Integer orderId, String newStatus);
+}
 ----
 
 The contract of the method `Try<Boolean> tryUpdateStatus` is to return a `Try` object that contains the result of the update operation. However, when the method is called, it returns a `Try<Try<Boolean>>`.
@@ -38,7 +74,35 @@ This is the implementation of the custom repository fragment:
 [source,java]
 .CustomOrderRepositoryImpl.java
 ----
-include::src/main/java/com/example/spring_data_jdbc_try/order/repository/CustomOrderRepositoryImpl.java[]
+// include::src/main/java/com/example/spring_data_jdbc_try/order/repository/CustomOrderRepositoryImpl.java[]
+package com.example.spring_data_jdbc_try.order.repository;
+
+import io.vavr.control.Try;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.stereotype.Repository;
+
+@Repository
+class CustomOrderRepositoryImpl implements CustomOrderRepository {
+    private final JdbcTemplate jdbcTemplate;
+
+    public CustomOrderRepositoryImpl(JdbcTemplate jdbcTemplate) {
+        this.jdbcTemplate = jdbcTemplate;
+    }
+
+    public Boolean updateStatus(Integer orderId, String newStatus) {
+        String sql = "UPDATE orders SET status = ? WHERE id = ?";
+        var updated = jdbcTemplate.update(sql, newStatus, orderId);
+        if (updated == 0) {
+            throw new RuntimeException("Order " + orderId + " not found");
+        } else {
+            return true;
+        }
+    }
+
+    public Try<Boolean> tryUpdateStatus(Integer orderId, String newStatus) {
+        return Try.of(() -> updateStatus(orderId, newStatus));
+    }
+}
 ----
 
 This fragment provides 2 versions of the functionality:
@@ -56,7 +120,20 @@ In contradiction with the behaviour of placing the method in the custom fragment
 [source,java]
 .OrderRepository.java
 ----
-include::src/main/java/com/example/spring_data_jdbc_try/order/repository/OrderRepository.java[]
+// include::src/main/java/com/example/spring_data_jdbc_try/order/repository/OrderRepository.java[]
+package com.example.spring_data_jdbc_try.order.repository;
+
+import com.example.spring_data_jdbc_try.order.data.Order;
+import io.vavr.control.Try;
+import org.springframework.data.jdbc.repository.query.Modifying;
+import org.springframework.data.jdbc.repository.query.Query;
+import org.springframework.data.repository.ListCrudRepository;
+
+public interface OrderRepository extends ListCrudRepository<Order, Integer>, CustomOrderRepository {
+    @Modifying
+    @Query("UPDATE orders SET status = :newStatus WHERE id = :orderId")
+    public Try<Boolean> tryUpdateStatus2(Integer orderId, String newStatus);
+}
 ----
 
 It's the same signature as the one in the custom fragment, but this time it is placed in the base repository. and uses the `@Query` annotation so that spring-data-jdbc can generate the implementation for us.
@@ -68,7 +145,79 @@ I have provided an integration test that exposes the weird behaviour:
 [source,groovy]
 .OrderRepositoryIntegrationSpec.groovy
 ----
-include::src/test/groovy/com/example/spring_data_jdbc_try/order/repository/OrderRepositoryIntegrationSpec.groovy[]
+// include::src/test/groovy/com/example/spring_data_jdbc_try/order/repository/OrderRepositoryIntegrationSpec.groovy[]
+package com.example.spring_data_jdbc_try.order.repository
+
+import com.example.spring_data_jdbc_try.SpringDataJdbcTryApplication
+import com.example.spring_data_jdbc_try.order.data.Order
+import io.vavr.control.Try
+import org.springframework.beans.factory.annotation.Autowired
+import org.springframework.boot.test.context.SpringBootTest
+import org.springframework.transaction.annotation.Transactional
+import spock.lang.Specification
+import spock.lang.Subject
+
+@Subject(OrderRepository)
+@SpringBootTest(classes = [SpringDataJdbcTryApplication])
+@Transactional
+class OrderRepositoryIntegrationSpec extends Specification {
+    @Subject
+    @Autowired
+    private OrderRepository orderRepository
+
+    def "It succeeds to update an order's status if the custom repository method returns a Boolean"() {
+        given:
+        def order = new Order(null, anyString(), "NEW")
+        var saved = orderRepository.save(order)
+
+
+        when:
+        def newStatus = orderRepository.updateStatus(saved.id(), "OUT_OF_STOCK")
+
+        then:
+        newStatus
+    }
+
+    def "It fails to correctly return the type of a CUSTOM repository method that returns a Try instance. Instead returns a Try<Try<?>>"() {
+        given:
+        def order = new Order(null, anyString(), "NEW")
+        var saved = orderRepository.save(order)
+
+
+        when:
+        def attempt = orderRepository.tryUpdateStatus(saved.id(), "OUT_OF_STOCK")
+
+        then:
+        attempt.success
+        Try.isAssignableFrom(attempt.class)
+        def wrappedValueShouldBeBoolean = attempt.get() as Try// this should be a Boolean, but is a Try<Boolean>
+        Try.isAssignableFrom(wrappedValueShouldBeBoolean.class)
+        wrappedValueShouldBeBoolean.success
+        wrappedValueShouldBeBoolean.get() == true
+    }
+
+    def "It correctly returns the type of a BASE repository method that returns a Try instance."() {
+        given:
+        def order = new Order(null, anyString(), "NEW")
+        var saved = orderRepository.save(order)
+
+
+        when:
+        def attempt = orderRepository.tryUpdateStatus2(saved.id(), "OUT_OF_STOCK")
+
+        then:
+        attempt.success
+        Try.isAssignableFrom(attempt.class)
+        def wrappedValueShouldBeBoolean = attempt.get()
+        wrappedValueShouldBeBoolean.class == Boolean
+        wrappedValueShouldBeBoolean == true
+    }
+
+
+    static String anyString() {
+        UUID.randomUUID().toString()
+    }
+}
 ----
 
 == Conclusion
